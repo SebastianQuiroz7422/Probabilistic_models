@@ -246,7 +246,9 @@ if __name__ == '__main__':
     import os
 
     # os.chdir(r'D:\OneDrive\RU\Intern\rtrbm_master')
-    from boltzmann_machines.data import create_BB
+    import os
+    a = os.getcwd()
+    from data import create_BB
     import seaborn as sns
     import matplotlib.pyplot as plt
     from tqdm import tqdm
