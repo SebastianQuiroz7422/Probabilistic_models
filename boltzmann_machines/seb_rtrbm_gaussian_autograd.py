@@ -588,8 +588,6 @@ class apply_constraints(object):
             gamma = torch.maximum(gamma_min,
                                   torch.clamp_(gamma, min=(1-gamma_max_deviate) * self.gamma_, max=(1+gamma_max_deviate) * self.gamma_))
 
-
-
 if __name__ == '__main__':
     import os
 
