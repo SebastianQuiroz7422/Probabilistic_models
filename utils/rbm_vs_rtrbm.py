@@ -1,11 +1,11 @@
-from boltzmann_machines.data.reshape_data import *
-from boltzmann_machines.data import *
+from data.reshape_data import *
+from data.load_data import *
 import time
 from utils.plots import *
 from boltzmann_machines.cp_rtrbm import RTRBM
 from utils.moments_plot import infer_and_get_moments_plot
 from boltzmann_machines.cp_rbm import RBM
-from boltzmann_machines.data import get_split_data
+from data.load_data import get_split_data
 
 
 def zebrafish_compare(
@@ -136,7 +136,7 @@ def train_rbm_rtrbm(
 
 
 if __name__ == '__main__':
-    ax, res_rbm, res_rtrbm = zebrafish_compare(path='../boltzmann_machines/data/part brain',
+    ax, res_rbm, res_rtrbm = zebrafish_compare(path='../data/part brain',
                                                save_fig_path='../figures/test.png',
                                                N_V=1000, N_H=10,
                                                pre_gibbs_k=0, gibbs_k=100,

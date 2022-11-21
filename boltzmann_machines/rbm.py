@@ -215,8 +215,8 @@ class RBM(object):
 if __name__ == '__main__':
 
     # This is an example run:
-    from boltzmann_machines.data.reshape_data import *
-    from boltzmann_machines.data import *
+    from data.reshape_data import *
+    from data.mock_data import *
     import seaborn as sns
     import os
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -228,7 +228,7 @@ if __name__ == '__main__':
     std = torch.zeros(N_H, 20)
 
     rbm = RBM(data, N_H=N_H, device="cpu")
-    rbm.learn(batch_size=1, n_epochs=2, lr=1e-3, mom=0, wc=0, sp=None, disable_tqdm=False)
+    rbm.learn(batch_size=6, n_epochs=2, lr=1e-3, mom=0, wc=0, sp=None, disable_tqdm=False)
 
     plt.plot(rbm.errors)
     plt.show()

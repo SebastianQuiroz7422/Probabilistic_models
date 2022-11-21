@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 from matplotlib.patches import Arc, RegularPolygon
 from matplotlib.animation import FuncAnimation
+from matplotlib.widgets import Slider
 import torch
 import numpy as np
 
@@ -11,6 +12,106 @@ def receptive_fields(weights, coordinates, only_max_conn=True):
         return (torch.matmul(torch.abs(weights) * idx, coordinates).T / torch.sum(torch.abs(weights * idx), 1)).T
     else:
         return (torch.matmul(torch.abs(weights), coordinates).T / torch.sum(torch.abs(weights), 1)).T
+
+
+class MapZebra(object):
+    """This is a class to plot the neural assemblies of a trained (RT)RBM.
+    It has a slider that is used to change the hidden unit and a plots for each dimension.
+    To use, first create an instance of the class by giving the hidden-visible weights and the 3-dimensional coordinates
+    of the neurons. Then call MapZebra.plot() to create the plot.
+    It probably does not work in jupyter notebook.
+    """
+    def __init__(self, weights, coordinates, threshold=None):
+        self.weights = np.array(weights)
+        self.coordinates = np.array(coordinates)
+        self.n_hidden, self.n_visible = self.weights.shape
+        self.threshold = threshold
+
+        # get min and max coordinate values
+        self.x_min = np.min(self.coordinates[:, 0])
+        self.x_max = np.max(self.coordinates[:, 0])
+        self.y_min = np.min(self.coordinates[:, 1])
+        self.y_max = np.max(self.coordinates[:, 1])
+        self.z_min = np.min(self.coordinates[:, 2])
+        self.z_max = np.max(self.coordinates[:, 2])
+
+        # get the strongest connecting hidden unit
+        self.strongest_connections = np.argmax(np.abs(weights), 0)
+
+        # initialize plot
+        self.fig, self.axes = plt.subplots(1, 3, figsize=(15, 4))
+
+    def update(self, hidden_unit):
+        for ax in self.axes:
+            ax.cla()
+        hidden_unit = int(hidden_unit - 1)
+        if hidden_unit == -1:
+            self.axes[0].plot(self.coordinates[:, 0], self.coordinates[:, 1], '.', ms=1)
+            self.axes[1].plot(self.coordinates[:, 1], self.coordinates[:, 2], '.', ms=1)
+            self.axes[2].plot(self.coordinates[:, 0], self.coordinates[:, 2], '.', ms=1)
+        else:
+            visible_idx = self.strongest_connections == hidden_unit
+            if self.threshold is not None:
+                visible_idx *= np.abs(self.weights[hidden_unit, :]) > self.threshold
+                visible_idx = torch.tensor(visible_idx, dtype=torch.bool)
+            self.axes[0].plot(self.coordinates[visible_idx, 0], self.coordinates[visible_idx, 1], '.', ms=1)
+            self.axes[1].plot(self.coordinates[visible_idx, 1], self.coordinates[visible_idx, 2], '.', ms=1)
+            self.axes[2].plot(self.coordinates[visible_idx, 0], self.coordinates[visible_idx, 2], '.', ms=1)
+        self.set_limits_labels()
+        self.fig.canvas.draw_idle()
+
+    def set_limits_labels(self):
+        self.axes[0].set_xlim([self.x_min, self.x_max])
+        self.axes[0].set_ylim([self.y_min, self.y_max])
+        self.axes[1].set_xlim([self.y_min, self.y_max])
+        self.axes[1].set_ylim([self.z_min, self.z_max])
+        self.axes[2].set_xlim([self.x_min, self.x_max])
+        self.axes[2].set_ylim([self.z_min, self.z_max])
+        self.axes[0].set_xlabel('x')
+        self.axes[0].set_ylabel('y')
+        self.axes[1].set_xlabel('y')
+        self.axes[1].set_ylabel('z')
+        self.axes[2].set_xlabel('x')
+        self.axes[2].set_ylabel('z')
+
+    def plot_all(self):
+        self.axes[0].plot(self.coordinates[:, 0], self.coordinates[:, 1], '.', ms=1)
+        self.axes[1].plot(self.coordinates[:, 1], self.coordinates[:, 2], '.', ms=1)
+        self.axes[2].plot(self.coordinates[:, 0], self.coordinates[:, 2], '.', ms=1)
+        self.set_limits_labels()
+
+        # adjust the main plot to make room for the sliders
+        plt.subplots_adjust(left=0.25, bottom=0.25)
+
+        # Make a horizontal slider to control the hidden unit
+        self.axSlider = plt.axes([0.25, 0.1, 0.65, 0.03])
+
+        self.slider = Slider(
+            ax=self.axSlider,
+            label='#hidden unit',
+            valmin=0,
+            valmax=self.n_hidden + 1,
+            valinit=0,
+            valfmt='%d',
+        )
+
+        self.slider.on_changed(self.update)
+        return self.fig.show()
+
+    def plot_one(self, hidden_unit):
+        visible_idx = self.strongest_connections == hidden_unit
+        if self.threshold is not None:
+            visible_idx *= np.abs(self.weights[hidden_unit, :]) > self.threshold
+            visible_idx = visible_idx.type(torch.bool)
+        self.axes[0].plot(self.coordinates[visible_idx, 0], self.coordinates[visible_idx, 1], '.', ms=1)
+        self.axes[1].plot(self.coordinates[visible_idx, 1], self.coordinates[visible_idx, 2], '.', ms=1)
+        self.axes[2].plot(self.coordinates[visible_idx, 0], self.coordinates[visible_idx, 2], '.', ms=1)
+        self.set_limits_labels()
+        return self.fig.show()
+
+    def new_plot(self):
+        self.fig, self.axes = plt.subplots(1, 3, figsize=(15, 4))
+        return
 
 
 class MapHiddenStructure(object):
@@ -30,8 +131,6 @@ class MapHiddenStructure(object):
         self.cmap = plt.get_cmap('tab20')
 
         self.n_h, self.n_v = self.W.shape
-        if U is None:
-            self.U=torch.zeros(self.n_h, self.n_h)
 
         if coordinates is None:
             # assume an even distribution of visible neurons over populations
@@ -70,16 +169,7 @@ class MapHiddenStructure(object):
         max_hidden_connection = torch.max(torch.abs(W), 0)[1]
         U_norm = U / torch.max(U)
 
-        if torch.sum(torch.isnan(self.rf)):
-            rf = self.rf.detach().clone()
-            n_nans = int(torch.sum(torch.isnan(rf)) / 2) # 2 dimensions
-            HU_nan = torch.where(rf[:, 0] == torch.nan)
-            print('Receptive field contains %s nan values for HU :' + str() + '\nThese receptive fields are replaced with coordinates (0,0)' % (n_nans))
-            rf[torch.isnan(rf)] = 0
-        else :
-            rf = self.rf.detach().clone()
-
-        for h, (x, y) in enumerate(rf):
+        for h, (x, y) in enumerate(self.rf):
             # draw visible neurons as dots
             ax.scatter(self.coordinates[max_hidden_connection == h, 0],
                        self.coordinates[max_hidden_connection == h, 1],
@@ -123,8 +213,25 @@ class MapHiddenStructure(object):
 
 
 if __name__ == '__main__':
-    from map_hidden_structure import MapHiddenStructure
-    dir = '../boltzmann_machines/data/artificial data/rtrbm.pt'
-    x = MapHiddenStructure(dir=dir)
-    ax = x.draw_final_structure()
+    from data.load_data import get_split_data, load_data_thijs
+    import sys, os
+
+    sys.path.append(r'D:\OneDrive\RU\Intern\rtrbm_master\PGM\source')
+    sys.path.append(r'D:\OneDrive\RU\Intern\rtrbm_master\PGM\utilities')
+    import RBM_utils
+
+    os.chdir(r'D:/OneDrive/RU\Intern/rtrbm_master/cRBM Jerome+Thijs/crbm_zebrafish_spontaneous_data')
+    RBM = RBM_utils.loadRBM(
+        'cRBM_models/RBM3_20180912-Run01-spontaneous-rbm2_wb_test-segs-267-nseg10_M200_l1-2e-02_duration208093s_timestamp2020-05-16-0844.data')
+
+    _, coordinates, _ = load_data_thijs(
+        data_path=r'neural_recordings\full_calcium_data_sets\20180912_Run01_spontaneous_rbm2.h5')
+
+    spikes = np.load(
+        r'neural_recordings\full_spike-only_data_sets\20180912_Run01_spontaneous_rbm2__wb_spikes_only.npy')
+
+    spikes_idx = np.load(r'neural_recordings\full_spike-only_data_sets\spike_idx.npy')
+
+    map = MapZebra(weights=RBM.weights, coordinates=coordinates[spikes_idx, :], threshold=.01)
+    map.plot_all()
     plt.show()

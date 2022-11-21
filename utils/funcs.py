@@ -1,6 +1,57 @@
 import numpy as np
 import torch
 from tqdm import tqdm
+from scipy.stats import pearsonr
+from itertools import permutations
+from data.reshape_data import reshape_from_batches
+
+
+def get_pw_shifted(data, k=1):
+    return torch.matmul(data[:, :-k], data[:, k:].T) / (data.shape[1] - k)
+
+
+def get_reconstruction_mean_pairwise_correlations(true_data, sampled_data, n=1000, m=50000):
+
+    # reshape data if it is still in batches
+    if true_data.dim() == 3:
+        true_data = reshape_from_batches(true_data)
+    if sampled_data.dim() == 3:
+        sampled_data = reshape_from_batches(sampled_data)
+
+    # reduce shape to reduce computation time
+    if true_data.shape[0] > n:
+        idx = torch.randperm(true_data.shape[0])[:n]
+        true_data = true_data[idx, :]
+        sampled_data = sampled_data[idx, :]
+
+    # get correlation of true and reconstructed data
+    reconstruction_correlation, _ = pearsonr(true_data.flatten(), sampled_data.flatten())
+
+    # calculate first order moments
+    true_moments, sampled_moments = torch.mean(true_data, 1), torch.mean(sampled_data, 1)
+
+    # get correlation of true and reconstructed first order moments
+    mean_correlation, _ = pearsonr(true_moments, sampled_moments)
+
+    # calculate second order moments
+    true_pairwise = pairwise_moments(true_data, true_data).flatten()
+    sampled_pairwise = pairwise_moments(sampled_data, sampled_data).flatten()
+
+    # reduce shape to reduce computation time
+    if true_pairwise.shape[0] > m:
+        idx = torch.randperm(true_pairwise.shape[0])[:m]
+        true_pairwise = true_pairwise[idx]
+        sampled_pairwise = sampled_pairwise[idx]
+
+    # get correlation of true and reconstructed second order moments
+    pairwise_correlation, _ = pearsonr(true_pairwise, sampled_pairwise)
+
+    # return
+    return reconstruction_correlation, mean_correlation, pairwise_correlation
+
+
+def calculate_correlation(x, y):
+    return pearsonr(x, y)
 
 
 def set_to_device(rtrbm, device):
@@ -14,6 +65,7 @@ def set_to_device(rtrbm, device):
     rtrbm.device = device
 
     return
+
 
 def pairwise_moments(data1, data2):
     """Average matrix product."""
@@ -273,25 +325,102 @@ def correlation_matrix(data):
     return C
 
 
-def cross_correlation(data, time_shift=1):
-    if np.array(data.shape).shape[0]==3:
-
+def cross_correlation(data, time_shift=1, mode='Correlate'):
+    data = np.array(data)
+    time_shift = int(time_shift)
+    if data.ndim==3:
         for s in range(data.shape[2]):
-            population_vector_t = np.array(data[:, time_shift:, s])
-            population_vector_tm = np.array(data[:, :-time_shift, s])
+            if time_shift == 0:
+                population_vector_t = np.array(data)
+                population_vector_tm = np.array(data)
+            elif time_shift != 0:
+                population_vector_t = np.array(data[:, time_shift:, s])
+                population_vector_tm = np.array(data[:, :-time_shift, s])
             C = np.zeros([population_vector_t.shape[0], population_vector_tm.shape[0], data.shape[2]])
             for i in range(population_vector_t.shape[0]):
                 for j in range(population_vector_tm.shape[0]):
-                    C[i][j][s] = np.correlate(population_vector_t[i], population_vector_tm[j])
+                    if mode == 'Correlate':
+                        C[i][j][s] = np.correlate(population_vector_t[i], population_vector_tm[j])
+                    elif mode == 'Pearson':
+                        C[i][j][s] = np.corrcoef(population_vector_t[i], population_vector_tm[j])[1, 0]
         C = np.mean(C, 2)
 
-    elif np.array(data.shape).shape[0]==2:
+    elif data.ndim==2:
+        if time_shift == 0:
+            population_vector_t = np.array(data)
+            population_vector_tm = np.array(data)
+        elif time_shift != 0:
+            population_vector_t = np.array(data[:, time_shift:])
+            population_vector_tm = np.array(data[:, :-time_shift])
 
-        population_vector_t = np.array(data[:, time_shift:])
-        population_vector_tm = np.array(data[:, :-time_shift])
         C = np.zeros([population_vector_t.shape[0], population_vector_tm.shape[0]])
         for i in range(population_vector_t.shape[0]):
             for j in range(population_vector_tm.shape[0]):
-                C[i][j] = np.correlate(population_vector_t[i], population_vector_tm[j])
+                if mode == 'Correlate':
+                    C[i][j] = np.correlate(population_vector_t[i], population_vector_tm[j])
+                elif mode == 'Pearson':
+                    C[i][j] = np.corrcoef(population_vector_t[i], population_vector_tm[j])[1, 0]
     return C
 
+def create_U_hat(n_h):
+    U_hat = torch.zeros(n_h, n_h)
+    U_hat += torch.diag(torch.ones(n_h - 1), diagonal=-1)
+    U_hat += torch.diag(-torch.ones(n_h - 1), diagonal=1)
+    U_hat[0, -1] = 1
+    U_hat[-1, 0] = -1
+
+    return U_hat
+
+
+def shuffle_back(W_trained, U_trained, U_true):
+    # calculate correlation and reshuffle weights
+    n_h, n_v = W_trained.shape
+    corr = np.zeros((n_h, n_h))
+    shuffle_idx = np.zeros((n_h))
+    for i in range(n_h):
+        for j in range(n_h):
+            corr[i, j] = np.correlate(U_trained[j, :], U_true[i, :])
+        shuffle_idx[i] = np.argmax(corr[i, :])
+
+    W_trained = W_trained[shuffle_idx, :]
+    U_trained = U_trained[shuffle_idx, :]
+    U_trained = U_trained[:, shuffle_idx]
+    return W_trained, U_trained
+
+
+from itertools import permutations
+
+
+def get_best_correlation(U, U_hat, mode='max'):
+    # number of hidden units
+    n_h = int(U.shape[0])
+
+    # create empty np array to save correlations
+    corrs = np.empty(np.math.factorial(n_h))
+
+    # get all possible permutations of hidden units
+    perms = permutations(range(0, n_h))
+
+    # loop over all permutations
+    for i, idx in enumerate(perms):
+
+        # permute U
+        U_ = U[idx, :]
+        U_ = U_[:, idx]
+
+        # calculate correlation with true weights
+        correlation = np.corrcoef(U_.flatten(), U_hat.flatten())[0, 1]
+
+        # save correlation
+        corrs[i] = correlation
+
+    # return max value
+    if mode == 'max':
+        return np.max(corrs)
+
+    # return mean value
+    elif mode == 'mean':
+        return np.mean(corrs)
+
+    else:
+        raise ValueError('"mode" must be "max" or "mean"')
